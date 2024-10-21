@@ -6,7 +6,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
+#include <LiquidCrystal_I2C.h>
 
+#define COL_POS(i) (3 + i + i * 3)
 #define INITIAL_TIMER 100000
 #define TIME_FACTOR 100
 #define GAME_OVER_TIME 1000
@@ -61,6 +63,7 @@ void turnOffLeds();
 void restartGame();
 void settingDifficultyPhase();
 void defaultDifficulty();
+void setUpTimer(void (*function)(), long int time);
 Difficulty mapDifficulty(int value);
 
 
@@ -92,12 +95,15 @@ boolean alreadySetUpDifficultyPhase;
 boolean alreadySetUpGameOverPhase;
 
 volatile boolean isAwake;
-
+volatile boolean isSleeping;
 int prev, brightness, currentDifficulty;
 // prev is unsigned long int due to overflow when the arduino is on for a long time
 volatile unsigned long int prevTime;
 volatile enum Difficulty gameDifficulty;
 volatile int count;
+volatile boolean isCorrect;
+LiquidCrystal_I2C lcd = LiquidCrystal_I2C(0x27,20,4); 
+
 
 void setup() {
     // PHASE 0: initialize game state
@@ -108,6 +114,8 @@ void setup() {
     counterTimer = 0;
     Timer1.initialize(INITIAL_TIMER);
     Timer1.attachInterrupt(sleep);
+    lcd.init();
+    lcd.backlight();
 
     // PHASE 1: game phase
     srand(time(NULL));
@@ -118,9 +126,11 @@ void setup() {
     prev = 0;
     brightness = 0;
     prevTime = 0;
+    isCorrect = false;
     // PHASE GAME OVER
     alreadySetUpGameOverPhase = false;
     isAwake = false;
+    isSleeping = false;
     gameDifficulty = EASY;
     // setup pins (output)
     for (int i = 0; i < DIM; i++) {
@@ -170,10 +180,11 @@ void loop() {
 
 void initialPhase() {
     if (!isFirstGame && !alreadySetUpInitialPhase) {
-        Timer1.detachInterrupt();
-        Timer1.setPeriod(INITIAL_TIMER);
-        Timer1.restart();
-        Timer1.attachInterrupt(sleep);
+        // Timer1.detachInterrupt();
+        // Timer1.setPeriod(INITIAL_TIMER);
+        // Timer1.restart();
+        // Timer1.attachInterrupt(sleep);
+        setUpTimer(sleep, INITIAL_TIMER);
         score = 0;
         brightness = 0;
         counterTimer = 0;
@@ -187,16 +198,18 @@ void initialPhase() {
     if (!alreadySetUpInitialPhase) {
         alreadySetUpInitialPhase = true;
         isFirstGame = false;
-        Serial.println("Welcome to GMN\nPress B1 to start!");
+        lcd.clear();
+        lcd.setCursor(2,1);
+        lcd.print("Welcome to GMN");
+        lcd.setCursor(2,2);
+        lcd.print("Press B1");
     }
     fading();
     // POLLING
-    noInterrupts();
     if (digitalRead(buttons[DIM - 1]) == HIGH) {
         delay(ELAPSED);
         state = SETTING_DIFFICULTY;
     }
-    interrupts();
 }
 
 void fading() {
@@ -210,20 +223,43 @@ void fading() {
 
 void settingDifficultyPhase() {
     if (!alreadySetUpDifficultyPhase) {
-        Serial.println("Set difficulty of the game...");
+        lcd.clear();
+        lcd.setCursor(2,0);
+        lcd.print("Set difficulty");
+        lcd.setCursor(2,1);
+        lcd.print("of the game...");
+        for (int i = 0; i < DIM; i++){
+          lcd.setCursor(COL_POS(i), 2);
+          lcd.print(i+1);
+          lcd.setCursor(COL_POS(i), 3);
+          if (i == gameDifficulty){
+            lcd.print("-");
+          }else{
+            lcd.print(" ");
+          }
+        }
         alreadySetUpDifficultyPhase = true;
         counterTimer = 0;
-        Timer1.detachInterrupt();
-        Timer1.setPeriod(2 * INITIAL_TIMER);
-        Timer1.restart();
-        Timer1.attachInterrupt(defaultDifficulty);
+        // Timer1.detachInterrupt();
+        // Timer1.setPeriod(2 * INITIAL_TIMER);
+        // Timer1.restart();
+        // Timer1.attachInterrupt(defaultDifficulty);
+        setUpTimer(defaultDifficulty, 2*INITIAL_TIMER);
+        digitalWrite(LED_S, LOW);
     }
     int newValue = analogRead(POT);
     Difficulty newGameDifficulty = mapDifficulty(newValue);
     if (gameDifficulty != newGameDifficulty) {
         gameDifficulty = newGameDifficulty;
-        Serial.println(gameDifficulty);
-        Serial.println("STATE: " + String(state));
+        for (int i = 0; i < DIM; i++){
+          lcd.setCursor(COL_POS(i), 3);
+          if (i == gameDifficulty){
+            lcd.print("-");
+          }else{
+            lcd.print(" ");
+          }
+        }
+
     }
 }
 
@@ -242,7 +278,6 @@ Difficulty mapDifficulty(int value) {
 void defaultDifficulty() {
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
-        Serial.println("TEMPO SCADUTO DECIDO IO!");
         state = START;
     }
 }
@@ -258,13 +293,17 @@ void gamePhase() {
     }
 }
 void startGamePhase() {
-    Serial.println("GO!");
-    digitalWrite(LED_S, LOW);
+    Timer1.stop();
+    lcd.clear();
+    lcd.setCursor(9,1);
+    lcd.print("GO!");
+    delay(ELAPSED * 10);
     counterTimer = 0;
-    Timer1.detachInterrupt();
-    Timer1.setPeriod(gameTime);
-    Timer1.restart();
-    Timer1.attachInterrupt(checkResult);
+    // Timer1.detachInterrupt();
+    // Timer1.setPeriod(gameTime);
+    // Timer1.restart();
+    // Timer1.attachInterrupt(checkResult);
+    setUpTimer(checkResult, gameTime);
     switch (gameDifficulty) {
         case EASY:
             decreasingFactor = EASY_DECREASING;
@@ -282,16 +321,31 @@ void startGamePhase() {
 }
 
 void setUpGamePhase() {
+    if(isCorrect){
+      score++;
+      //Serial.println("Decreasing Factor: " + String(decreasingFactor) + " for a difficulty of " + String(gameDifficulty));
+      lcd.clear();
+      lcd.setCursor(2, 1);
+      Timer1.stop();
+      lcd.print("GOOD! SCORE: " + String(score));
+      delay(ELAPSED * 20);
+      gameTime = (gameTime) * (100 - decreasingFactor) / 100;
+      counterTimer = 0;
+      Timer1.setPeriod(gameTime);
+      Timer1.restart();
+      isCorrect = false;
+    }
     turnOffLeds();
     number = rand() % (MAX_NUMBER + 1);
-    Serial.println("Write in binary: " + String(number));
+    lcd.clear();
+    lcd.setCursor(9, 1);
+    lcd.print(number);
 }
 
 // INTERRUPT
 void checkResult() {
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
-        Serial.println("Time to check: " + String(millis()));
         int current = 0;
         for (int i = 0; i < DIM; i++) {
             if (pinsState[i] == HIGH) {
@@ -299,16 +353,8 @@ void checkResult() {
             }
         }
         if (current == number) {
-            score++;
-            Serial.println("Decreasing Factor: " + String(decreasingFactor) + " for a difficulty of " + String(gameDifficulty));
-            Serial.println("GOOD! SCORE: " + String(score));
-            Serial.println("Game time before: " + String(gameTime));
-            gameTime = (gameTime) * (100 - decreasingFactor) / 100;
-            Serial.println("Game time after: " + String(gameTime));
+            isCorrect = true;
             alreadySetUpGamePhase = false;
-            counterTimer = 0;
-            Timer1.setPeriod(gameTime);
-            Timer1.restart();
         } else {
             state = GAME_OVER;
         }
@@ -319,16 +365,26 @@ void gameOverPhase() {
     if (!alreadySetUpGameOverPhase) {
         alreadySetUpGameOverPhase = true;
         counterTimer = 0;
-        Serial.println("GAME OVER! - Final Score: " + String(score));
-        Timer1.detachInterrupt();
-        Timer1.setPeriod(INITIAL_TIMER);
-        Timer1.restart();
-        Timer1.attachInterrupt(restartGame);
+        lcd.clear();
+        lcd.setCursor(5,0);
+        lcd.print("GAME OVER!");
+        lcd.setCursor(10, 1);
+        lcd.print("-");
+        lcd.setCursor(2, 2);
+        lcd.print("Final Score: " + String(score));
+        setUpTimer(restartGame, INITIAL_TIMER);
         turnOffLeds();
         digitalWrite(LED_S, HIGH);
         delay(GAME_OVER_TIME);
         digitalWrite(LED_S, LOW);
     }
+}
+
+void setUpTimer(void (*function)(), long int time){
+  Timer1.detachInterrupt();
+  Timer1.setPeriod(time);
+  Timer1.restart();
+  Timer1.attachInterrupt(function);
 }
 
 // RESTART
@@ -348,7 +404,12 @@ void turnOffLeds() {
 }
 
 void sleepPhase() {
-    Serial.println("GOING IN POWER MODE...");
+    if (isSleeping){
+      isSleeping = false;
+      lcd.clear();
+      lcd.setCursor(2,1);
+      lcd.print("POWER MODE...");
+    }
     Serial.flush();
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     sleep_enable();
@@ -356,7 +417,6 @@ void sleepPhase() {
     sleep_disable();
     if (isAwake) {
         isAwake = false;
-        Serial.println("WAKING UP.....");
         state = INITIAL;
         alreadySetUpInitialPhase = false;
     }
@@ -367,9 +427,8 @@ void sleep() {
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
         state = SLEEP;
+        isSleeping = true;
         digitalWrite(LED_S, LOW);
-        Serial.println(("SLEEPING!"));
-        Serial.println(millis());
         counterTimer = 0;
     }
 }
@@ -403,8 +462,9 @@ void interruptButton() {
             break;
         }
         case SETTING_DIFFICULTY:
-            Serial.println("DIFFICULTY SELECTED");
-            Serial.println("DIFFICULTY: " + String(gameDifficulty));
+            // Serial.println("DIFFICULTY SELECTED");
+            // Serial.println("DIFFICULTY: " + String(gameDifficulty));
+            delayMicroseconds(10000);
             state = START;
             break;
         case SLEEP:
