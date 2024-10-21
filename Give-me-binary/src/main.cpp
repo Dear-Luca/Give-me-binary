@@ -30,6 +30,7 @@ int decreasingFactor;
 int score;
 long int gameTime;
 volatile boolean isCorrect;
+volatile boolean isPressed;
 // prev is unsigned long int due to overflow when the arduino is on for a long time
 volatile unsigned long int prevTime;
 
@@ -66,6 +67,7 @@ void setup() {
     gameTime = INITIAL_TIMER;
     prevTime = 0;
     isCorrect = false;
+    isPressed = false;
 
     // GAME OVER PHASE
     alreadySetUpGameOverPhase = false;
@@ -97,7 +99,10 @@ void setup() {
 }
 
 void loop() {
-    switch (state) {
+  noInterrupts();
+  State currentState = state;
+  interrupts();
+    switch (currentState) {
         case INITIAL:
             initialPhase();
             break;
@@ -191,15 +196,42 @@ Difficulty mapDifficulty(int value) {
 
 //GAME PHASE
 void gamePhase() {
-    if (!enterGamePhase) {
-        enterGamePhase = true;
-        startGamePhase();
-    }
-    if (!alreadySetUpGamePhase) {
-        alreadySetUpGamePhase = true;
-        setUpGamePhase();
-    }
-}
+  if (!enterGamePhase) {
+      enterGamePhase = true;
+      startGamePhase();
+  }
+  if (!alreadySetUpGamePhase) {
+      alreadySetUpGamePhase = true;
+      setUpGamePhase();
+  }
+  noInterrupts();
+  if (isPressed){
+    isPressed = false;
+    unsigned long int time = millis();
+    if (time - prevTime > ELAPSED){
+      prevTime = time;
+        switch (arduinoInterruptedPin) {
+            case BUTTON_4:
+              pinsState[0] = !pinsState[0];
+              digitalWrite(pins[0], pinsState[0]);
+              break;
+            case BUTTON_3:
+              pinsState[1] = !pinsState[1];
+              digitalWrite(pins[1], pinsState[1]);
+              break;
+            case BUTTON_2:
+              pinsState[2] = !pinsState[2];
+              digitalWrite(pins[2], pinsState[2]);
+              break;
+            case BUTTON_1:
+              pinsState[3] = !pinsState[3];
+              digitalWrite(pins[3], pinsState[3]);
+              break;
+          }
+      } 
+  }
+  interrupts();
+} 
 
 void startGamePhase() {
     Timer1.stop();
@@ -273,33 +305,40 @@ void gameOverPhase() {
 }
 
 void restartGame() {
-    counterTimer++;
-    if (counterTimer == TIME_FACTOR) {
-        state = INITIAL;
-        alreadySetUpInitialPhase = false;
-    }
+  noInterrupts();
+  counterTimer++;
+  if (counterTimer == TIME_FACTOR) {
+      state = INITIAL;
+      alreadySetUpInitialPhase = false;
+  }
+  interrupts();
 }
 
 //SLEEPING PHASE
 void sleepPhase() {
+    noInterrupts();
     if (isSleeping){
       isSleeping = false;
       printSleeping();
     }
+    interrupts();
     Serial.flush();
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
     sleep_enable();
     sleep_mode();
     sleep_disable();
+    noInterrupts();
     if (isAwake) {
         isAwake = false;
         state = INITIAL;
         alreadySetUpInitialPhase = false;
     }
+    interrupts();
     delay(2 * ELAPSED);
 }
 
 void sleep() {
+    noInterrupts();
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
         state = SLEEP;
@@ -307,6 +346,7 @@ void sleep() {
         digitalWrite(LED_S, LOW);
         counterTimer = 0;
     }
+    interrupts();
 }
 
 //HELPER FUNCTIONS
@@ -324,36 +364,13 @@ void turnOffLeds() {
     }
 }
 
-//BUTTON HANDLER (INTERRUPT)
+//BUTTONS HANDLER (INTERRUPT)
 void interruptButton() {
     switch (state) {
-        case START: {
-            unsigned long int time = millis();
-            if (time - prevTime > ELAPSED) {
-                prevTime = time;
-                switch (arduinoInterruptedPin) {
-                    case BUTTON_4:
-                        pinsState[0] = !pinsState[0];
-                        digitalWrite(pins[0], pinsState[0]);
-                        break;
-                    case BUTTON_3:
-                        pinsState[1] = !pinsState[1];
-                        digitalWrite(pins[1], pinsState[1]);
-                        break;
-                    case BUTTON_2:
-                        pinsState[2] = !pinsState[2];
-                        digitalWrite(pins[2], pinsState[2]);
-                        break;
-                    case BUTTON_1:
-                        pinsState[3] = !pinsState[3];
-                        digitalWrite(pins[3], pinsState[3]);
-                        break;
-                }
-            }
+        case START:
+            isPressed = true;
             break;
-        }
         case SETTING_DIFFICULTY:
-            delayMicroseconds(10000);
             state = START;
             break;
         case SLEEP:

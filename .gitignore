@@ -1,5 +1,5 @@
-/.pio
-/.vscode
+Give-me-binary/.pio
+Give-me-binary/.vscode
 
 *.elf
 *.bin
@@ -12,7 +12,7 @@
 /.clangd
 /.coverage
 
-lib/*/.pio
+Give-me-binary/lib/*/.pio
 
 *.log
 *.tmp
