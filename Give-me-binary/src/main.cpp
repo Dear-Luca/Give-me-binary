@@ -1,137 +1,78 @@
 #define EI_ARDUINO_INTERRUPTED_PIN
-#include <Arduino.h>
 #include <EnableInterrupt.h>
 #include <TimerOne.h>
 #include <avr/sleep.h>
-#include <math.h>
 #include <stdlib.h>
 #include <time.h>
-#include <LiquidCrystal_I2C.h>
+#include <Arduino.h>
 
-#define COL_POS(i) (3 + i + i * 3)
-#define INITIAL_TIMER 100000
-#define TIME_FACTOR 100
-#define GAME_OVER_TIME 1000
-#define FADE 5
-#define DIM 4
-#define START_PIN 10
-#define START_BUTTON 4
-#define DISTANCE (START_PIN - START_BUTTON)
-#define ELAPSED 100
-#define EASY_DECREASING 10
-#define MEDIUM_DECREASING 15
-#define HARD_DECREASING 20
-#define EXTREME_DECREASING 30
-// pin 3 because it's not used by timer 1
-#define LED_S 3
-#define POT A0
-#define QUARTER 255
-#define MAX_BRIGHTNESS 255
-#define MAX_NUMBER 15
-#define DECREASING_FACTOR 20
-#define BUTTON_1 7
-#define BUTTON_2 6
-#define BUTTON_3 5
-#define BUTTON_4 4
+#include "General.h"
+#include "LCD.h"
 
-enum Difficulty {
-    EASY,
-    MEDIUM,
-    HARD,
-    EXTREME,
-};
-
-enum State {
-    INITIAL,
-    SETTING_DIFFICULTY,
-    SLEEP,
-    START,
-    GAME_OVER,
-};
-
-void sleep();
-void interruptButton();
-void initialPhase();
-void gamePhase();
-void sleepPhase();
-void gameOverPhase();
-void fading();
-void startGamePhase();
-void setUpGamePhase();
-void checkResult();
-void turnOffLeds();
-void restartGame();
-void settingDifficultyPhase();
-void defaultDifficulty();
-void setUpTimer(void (*function)(), long int time);
-Difficulty mapDifficulty(int value);
-
-
-
-// GENERAL
-volatile int pins[DIM];
-volatile int pinsState[DIM];
-int buttons[DIM];
-
-// PHASE 0
-boolean alreadySetUpInitialPhase;
+// INITIAL PHASE
+volatile boolean alreadySetUpInitialPhase;
+int brightness;
 int fade;
 volatile enum State state;
 volatile int counterTimer;
 boolean isFirstGame;
 
-// PHASE 1
-int number;
-int score;
-uint32_t gameTime;
+//SETTING DIFFICULTY PHASE
+boolean alreadySetUpDifficultyPhase;
+volatile enum Difficulty gameDifficulty;
+int currentDifficulty;
+
+//GAME PHASE
 volatile boolean alreadySetUpGamePhase;
+int number;
 boolean enterGamePhase;
 int decreasingFactor;
-
-// PHASE SETTING_DIFFICULTY
-boolean alreadySetUpDifficultyPhase;
-
-// PHASE 2
-boolean alreadySetUpGameOverPhase;
-
-volatile boolean isAwake;
-volatile boolean isSleeping;
-int prev, brightness, currentDifficulty;
+int score;
+long int gameTime;
+volatile boolean isCorrect;
 // prev is unsigned long int due to overflow when the arduino is on for a long time
 volatile unsigned long int prevTime;
-volatile enum Difficulty gameDifficulty;
-volatile int count;
-volatile boolean isCorrect;
-LiquidCrystal_I2C lcd = LiquidCrystal_I2C(0x27,20,4); 
+
+//GAME OVER PHASE
+boolean alreadySetUpGameOverPhase;
+
+//SLEEPING PHASE
+volatile boolean isSleeping;
+volatile boolean isAwake;
+
+//LEDS & BUTTONS
+volatile int pins[DIM];
+volatile int pinsState[DIM];
+int buttons[DIM];
 
 
 void setup() {
-    // PHASE 0: initialize game state
+    // INITIALIZE PHASE
     state = INITIAL;
     fade = FADE;
     isFirstGame = true;
     alreadySetUpInitialPhase = false;
+    brightness = 0;
     counterTimer = 0;
     Timer1.initialize(INITIAL_TIMER);
     Timer1.attachInterrupt(sleep);
-    lcd.init();
-    lcd.backlight();
+    lcdInit();
 
-    // PHASE 1: game phase
+    // GAME PHASE
     srand(time(NULL));
     score = 0;
     enterGamePhase = false;
     alreadySetUpGamePhase = false;
     gameTime = INITIAL_TIMER;
-    prev = 0;
-    brightness = 0;
     prevTime = 0;
     isCorrect = false;
-    // PHASE GAME OVER
+
+    // GAME OVER PHASE
     alreadySetUpGameOverPhase = false;
     isAwake = false;
     isSleeping = false;
     gameDifficulty = EASY;
+
     // setup pins (output)
     for (int i = 0; i < DIM; i++) {
         pins[i] = i + START_PIN;
@@ -139,6 +80,7 @@ void setup() {
         pinMode(pins[i], OUTPUT);
     }
     pinMode(LED_S, OUTPUT);
+
     // setup buttons (input)
     for (int i = 0; i < DIM; i++) {
         buttons[i] = i + START_BUTTON;
@@ -151,14 +93,10 @@ void setup() {
     enableInterrupt(buttons[2], interruptButton, RISING);
     enableInterrupt(buttons[3], interruptButton, RISING);
 
-    // count variable for debugging
-    count = 0;
-
     Serial.begin(9600);
 }
 
 void loop() {
-    // debugButtons();
     switch (state) {
         case INITIAL:
             initialPhase();
@@ -178,12 +116,9 @@ void loop() {
     }
 }
 
+//INITIAL PHASE
 void initialPhase() {
     if (!isFirstGame && !alreadySetUpInitialPhase) {
-        // Timer1.detachInterrupt();
-        // Timer1.setPeriod(INITIAL_TIMER);
-        // Timer1.restart();
-        // Timer1.attachInterrupt(sleep);
         setUpTimer(sleep, INITIAL_TIMER);
         score = 0;
         brightness = 0;
@@ -198,11 +133,7 @@ void initialPhase() {
     if (!alreadySetUpInitialPhase) {
         alreadySetUpInitialPhase = true;
         isFirstGame = false;
-        lcd.clear();
-        lcd.setCursor(2,1);
-        lcd.print("Welcome to GMN");
-        lcd.setCursor(2,2);
-        lcd.print("Press B1");
+        printInitPhase();
     }
     fading();
     // POLLING
@@ -221,29 +152,12 @@ void fading() {
     delay(20);
 }
 
+//SETTING DIFFICULTY PHASE
 void settingDifficultyPhase() {
     if (!alreadySetUpDifficultyPhase) {
-        lcd.clear();
-        lcd.setCursor(2,0);
-        lcd.print("Set difficulty");
-        lcd.setCursor(2,1);
-        lcd.print("of the game...");
-        for (int i = 0; i < DIM; i++){
-          lcd.setCursor(COL_POS(i), 2);
-          lcd.print(i+1);
-          lcd.setCursor(COL_POS(i), 3);
-          if (i == gameDifficulty){
-            lcd.print("-");
-          }else{
-            lcd.print(" ");
-          }
-        }
+        printDifficultyPhaseInit();
         alreadySetUpDifficultyPhase = true;
         counterTimer = 0;
-        // Timer1.detachInterrupt();
-        // Timer1.setPeriod(2 * INITIAL_TIMER);
-        // Timer1.restart();
-        // Timer1.attachInterrupt(defaultDifficulty);
         setUpTimer(defaultDifficulty, 2*INITIAL_TIMER);
         digitalWrite(LED_S, LOW);
     }
@@ -251,15 +165,15 @@ void settingDifficultyPhase() {
     Difficulty newGameDifficulty = mapDifficulty(newValue);
     if (gameDifficulty != newGameDifficulty) {
         gameDifficulty = newGameDifficulty;
-        for (int i = 0; i < DIM; i++){
-          lcd.setCursor(COL_POS(i), 3);
-          if (i == gameDifficulty){
-            lcd.print("-");
-          }else{
-            lcd.print(" ");
-          }
-        }
+        printUpdateDifficulty();
 
+    }
+}
+
+void defaultDifficulty() {
+    counterTimer++;
+    if (counterTimer == TIME_FACTOR) {
+        state = START;
     }
 }
 
@@ -275,13 +189,7 @@ Difficulty mapDifficulty(int value) {
   }
 }
 
-void defaultDifficulty() {
-    counterTimer++;
-    if (counterTimer == TIME_FACTOR) {
-        state = START;
-    }
-}
-
+//GAME PHASE
 void gamePhase() {
     if (!enterGamePhase) {
         enterGamePhase = true;
@@ -292,17 +200,12 @@ void gamePhase() {
         setUpGamePhase();
     }
 }
+
 void startGamePhase() {
     Timer1.stop();
-    lcd.clear();
-    lcd.setCursor(9,1);
-    lcd.print("GO!");
+    printStartGamePhase();
     delay(ELAPSED * 10);
     counterTimer = 0;
-    // Timer1.detachInterrupt();
-    // Timer1.setPeriod(gameTime);
-    // Timer1.restart();
-    // Timer1.attachInterrupt(checkResult);
     setUpTimer(checkResult, gameTime);
     switch (gameDifficulty) {
         case EASY:
@@ -323,11 +226,8 @@ void startGamePhase() {
 void setUpGamePhase() {
     if(isCorrect){
       score++;
-      //Serial.println("Decreasing Factor: " + String(decreasingFactor) + " for a difficulty of " + String(gameDifficulty));
-      lcd.clear();
-      lcd.setCursor(2, 1);
       Timer1.stop();
-      lcd.print("GOOD! SCORE: " + String(score));
+      printGameSetUp();
       delay(ELAPSED * 20);
       gameTime = (gameTime) * (100 - decreasingFactor) / 100;
       counterTimer = 0;
@@ -337,12 +237,9 @@ void setUpGamePhase() {
     }
     turnOffLeds();
     number = rand() % (MAX_NUMBER + 1);
-    lcd.clear();
-    lcd.setCursor(9, 1);
-    lcd.print(number);
+    printNumber();
 }
 
-// INTERRUPT
 void checkResult() {
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
@@ -361,17 +258,12 @@ void checkResult() {
     }
 }
 
+//GAME OVER PHASE
 void gameOverPhase() {
     if (!alreadySetUpGameOverPhase) {
         alreadySetUpGameOverPhase = true;
         counterTimer = 0;
-        lcd.clear();
-        lcd.setCursor(5,0);
-        lcd.print("GAME OVER!");
-        lcd.setCursor(10, 1);
-        lcd.print("-");
-        lcd.setCursor(2, 2);
-        lcd.print("Final Score: " + String(score));
+        printGameOver();
         setUpTimer(restartGame, INITIAL_TIMER);
         turnOffLeds();
         digitalWrite(LED_S, HIGH);
@@ -380,14 +272,6 @@ void gameOverPhase() {
     }
 }
 
-void setUpTimer(void (*function)(), long int time){
-  Timer1.detachInterrupt();
-  Timer1.setPeriod(time);
-  Timer1.restart();
-  Timer1.attachInterrupt(function);
-}
-
-// RESTART
 void restartGame() {
     counterTimer++;
     if (counterTimer == TIME_FACTOR) {
@@ -396,19 +280,11 @@ void restartGame() {
     }
 }
 
-void turnOffLeds() {
-    for (int i = 0; i < DIM; i++) {
-        digitalWrite(pins[i], LOW);
-        pinsState[i] = LOW;
-    }
-}
-
+//SLEEPING PHASE
 void sleepPhase() {
     if (isSleeping){
       isSleeping = false;
-      lcd.clear();
-      lcd.setCursor(2,1);
-      lcd.print("POWER MODE...");
+      printSleeping();
     }
     Serial.flush();
     set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -433,13 +309,28 @@ void sleep() {
     }
 }
 
+//HELPER FUNCTIONS
+void setUpTimer(void (*function)(), long int time) {
+    Timer1.detachInterrupt();
+    Timer1.setPeriod(time);
+    Timer1.restart();
+    Timer1.attachInterrupt(function);
+}
+
+void turnOffLeds() {
+    for (int i = 0; i < DIM; i++) {
+        digitalWrite(pins[i], LOW);
+        pinsState[i] = LOW;
+    }
+}
+
+//BUTTON HANDLER (INTERRUPT)
 void interruptButton() {
     switch (state) {
         case START: {
             unsigned long int time = millis();
             if (time - prevTime > ELAPSED) {
                 prevTime = time;
-                count++;
                 switch (arduinoInterruptedPin) {
                     case BUTTON_4:
                         pinsState[0] = !pinsState[0];
@@ -462,8 +353,6 @@ void interruptButton() {
             break;
         }
         case SETTING_DIFFICULTY:
-            // Serial.println("DIFFICULTY SELECTED");
-            // Serial.println("DIFFICULTY: " + String(gameDifficulty));
             delayMicroseconds(10000);
             state = START;
             break;
@@ -473,12 +362,3 @@ void interruptButton() {
     }
 }
 
-void debugButtons() {
-    noInterrupts();
-    int current = count;
-    interrupts();
-    if (current != prev) {
-        Serial.println(current);
-        prev = current;
-    }
-}
